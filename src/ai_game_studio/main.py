@@ -1,6 +1,6 @@
 from pathlib import Path
 from .tools.github_tools import GitHubAutomation
-from anthropic import Anthropic
+from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import re
@@ -8,14 +8,19 @@ import re
 # Load environment variables from .env file
 load_dotenv()
 
-# Add these constants at the top with other imports
-ANSI_BLUE = "\033[94m"
+# ANSI color codes for different agents
+ANSI_BLUE = "\033[94m"      # Developer agent
+ANSI_GREEN = "\033[92m"     # Reviewer agent
+ANSI_RED = "\033[91m"       # Error messages
+ANSI_YELLOW = "\033[93m"    # Warnings
 ANSI_RESET = "\033[0m"
 ANSI_CYAN_BG = "\033[46m"
 ANSI_BLACK = "\033[30m"
 
-# Add this after the imports and before the functions
-SYSTEM_PROMPT = """You are an expert software developer. When modifying files:
+# Maximum attempts for the developer agent
+MAX_ATTEMPTS = 3
+
+DEVELOPER_PROMPT = """You are an expert software developer. When modifying files:
 
 1. COPY THE ENTIRE FILE LINE BY LINE:
    - Start with the very first line of the file
@@ -25,6 +30,7 @@ SYSTEM_PROMPT = """You are an expert software developer. When modifying files:
    - Do not summarize any sections
    - Do not use placeholders or comments like "existing code here" or "this stays the same"
    - Do not redact any code
+   - Do not remove any existing comments unless they are related to the changes you are making
 
 2. MAKE YOUR CHANGES:
    - Only modify the specific lines that need to change
@@ -45,47 +51,92 @@ ABSOLUTELY FORBIDDEN:
    - "/* Existing implementation */"
 ❌ DO NOT USE ellipsis (...) to skip code
 ❌ DO NOT USE placeholders or summaries
-❌ DO NOT SKIP any part of the file
+❌ DO NOT SKIP any part of the file"""
 
-Example - INCORRECT:
-FILE:game.html
-```html
-<div id="status-bar">
-    <!-- Previous status elements -->
-    <div>New Element: <span id="new-value"></span></div>
-    <!-- Rest of the status bar -->
-</div>
-```
+REVIEWER_PROMPT = """You are a meticulous code reviewer. Your job is to:
 
-Example - CORRECT:
-FILE:game.html
-```html
-<div id="status-bar">
-    <div>Health: <span id="health">100</span></div>
-    <div>Score: <span id="score">0</span></div>
-    <div>Position: (<span id="position-x">0</span>, <span id="position-y">0</span>)</div>
-    <div>New Element: <span id="new-value"></span></div>
-    <div>Player: <span id="player-name">Player1</span></div>
-</div>
-```
+1. Check if the developer's changes follow ALL these rules:
+   - No placeholder comments like "existing code here" or "rest of code remains the same"
+   - No ellipsis (...) used to skip code
+   - No summarized or abbreviated code sections
+   - Complete file content is present from start to finish
+   - No sections of code are missing or skipped
 
-Remember: The output must be an EXACT copy of the original file with ONLY your specific changes applied. Every single line must be present."""
+2. If you find ANY violations:
+   - List each specific violation
+   - Quote the problematic code
+   - Explain why it violates the rules
+   - Suggest how to fix it
 
-def sanitize_branch_name(task_description: str) -> str:
-    """Convert task description to valid branch name"""
-    # Convert to lowercase and replace spaces/special chars with hyphens
-    branch_name = re.sub(r'[^a-zA-Z0-9\s-]', '', task_description.lower())
-    branch_name = re.sub(r'\s+', '-', branch_name.strip())
-    return f"feature/{branch_name}"
+3. Format your response exactly like this:
+   If code passes review:
+   REVIEW_PASSED: No violations found.
 
-def get_ai_changes(task_description: str, repo_path: Path) -> bool:
-    """Use Claude to implement the requested changes"""
+   If code has violations:
+   REVIEW_FAILED:
+   - Violation 1: <description>
+     Line: <problematic code>
+     Fix: <suggestion>
+   - Violation 2: <description>
+     Line: <problematic code>
+     Fix: <suggestion>
+   ...etc."""
+
+def print_agent_message(agent_type: str, message: str):
+    """Print a message with the appropriate agent color"""
+    color = {
+        "developer": ANSI_BLUE,
+        "reviewer": ANSI_GREEN,
+        "error": ANSI_RED,
+        "warning": ANSI_YELLOW
+    }.get(agent_type, ANSI_RESET)
+    
+    print(f"{color}{message}{ANSI_RESET}")
+
+def review_changes(response: str) -> tuple[bool, str]:
+    """Use GPT-4o to review the code changes"""
     try:
-        print("\nStarting AI implementation process...")
+        print_agent_message("reviewer", "\nReviewing code changes...")
         
-        anthropic = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
-        print("1. Reading repository files...")
+        message = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": REVIEWER_PROMPT},
+                {"role": "user", "content": f"Review this code change:\n\n{response}"}
+            ],
+            temperature=0
+        )
+        
+        review_response = message.choices[0].message.content
+        print_agent_message("reviewer", f"\nReview result:\n{review_response}")
+        
+        passed = review_response.startswith("REVIEW_PASSED")
+        return passed, review_response
+        
+    except Exception as e:
+        print_agent_message("error", f"\nError during code review: {str(e)}")
+        return False, str(e)
+
+def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, previous_feedback: str = None) -> bool:
+    """Use GPT-4o to implement the requested changes"""
+    try:
+        print("\nAttempt", attempt, "of", MAX_ATTEMPTS)  # Neutral color for system messages
+        
+        if attempt > MAX_ATTEMPTS:
+            print_agent_message("error", "\nMaximum attempts reached. Aborting.")
+            return False
+        
+        # If there's previous feedback, show it to the developer
+        if previous_feedback:
+            print_agent_message("reviewer", "\nPrevious Review Feedback:")
+            print_agent_message("reviewer", previous_feedback)
+            print_agent_message("developer", "\nAttempting to fix the issues...")
+        
+        client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+        
+        print("\n1. Reading repository files...")  # Neutral color for system messages
         doc_files = {}
         code_files = {}
         
@@ -105,7 +156,7 @@ def get_ai_changes(task_description: str, repo_path: Path) -> bool:
                                 file_count += 1
                                 print(f"   - Read documentation file: {file_path.name}")
                         except Exception as e:
-                            print(f"   ⚠️  Error reading {file_path}: {e}")
+                            print_agent_message("error", f"   ⚠️  Error reading {file_path}: {e}")
             else:
                 # Handle specific files
                 file_path = repo_path / file_pattern
@@ -116,9 +167,9 @@ def get_ai_changes(task_description: str, repo_path: Path) -> bool:
                             file_count += 1
                             print(f"   - Read documentation file: {file_path.name}")
                     except Exception as e:
-                        print(f"   ⚠️  Error reading {file_path}: {e}")
+                        print_agent_message("error", f"   ⚠️  Error reading {file_path}: {e}")
         
-        print("\n2. Reading code files...")
+        print("\n2. Reading code files...")  # Neutral color for system messages
         # Then read code files
         for file_path in repo_path.rglob('*'):
             if file_path.is_file() and file_path.suffix in ['.py', '.js', '.ts', '.jsx', '.tsx', '.css', '.html']:
@@ -128,12 +179,12 @@ def get_ai_changes(task_description: str, repo_path: Path) -> bool:
                         file_count += 1
                         print(f"   - Read code file: {file_path.name}")
                 except Exception as e:
-                    print(f"   ⚠️  Error reading {file_path}: {e}")
+                    print_agent_message("error", f"   ⚠️  Error reading {file_path}: {e}")
 
-        print(f"\nTotal files read: {file_count}")
-        print("\n3. Preparing context for AI analysis...")
+        print(f"\nTotal files read: {file_count}")  # Neutral color for system messages
+        print("\n3. Preparing context for AI analysis...")  # Neutral color for system messages
         
-        # Prepare the context for Claude with clear sections
+        # Prepare the context for GPT-4 with clear sections
         context = f"""Task: {task_description}
 
 Repository Documentation:
@@ -148,38 +199,57 @@ Repository Documentation:
         for filename, content in code_files.items():
             context += f"\nFile: {filename}\n```\n{content}\n```\n"
 
-        print("\n4. Sending request to Claude...")
-        print("   This may take a few minutes depending on the complexity of the task...")
-        print("   The AI is analyzing the codebase and preparing changes...")
+        print("\n4. Sending request to GPT-4o...")  # Neutral color for system messages
+        print("   This may take a few minutes depending on the complexity of the task...")  # Neutral color for system messages
+        print("   The AI is analyzing the codebase and preparing changes...")  # Neutral color for system messages
         
-        # Increase max_tokens for larger responses
-        message = anthropic.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=8192,  # Increased from 4096
-            temperature=0,
-            system=SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": context + "\n\nPlease implement the requested changes following the project's conventions. Return only the file changes needed."
-            }]
+        # Update the task description to include previous feedback if any
+        full_task = task_description
+        if previous_feedback:
+            full_task = f"""Task: {task_description}
+
+Previous code review found these issues that need to be fixed:
+{previous_feedback}
+
+Please fix ALL these issues and ensure your response includes the COMPLETE file content with NO placeholders or summaries."""
+        
+        message = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": DEVELOPER_PROMPT},
+                {"role": "user", "content": context + "\n\n" + full_task}
+            ],
+            temperature=0
         )
 
-        print("\n5. Processing AI response...")
-        response = message.content[0].text
+        print_agent_message("developer", "\n5. Processing AI response...")
+        response = message.choices[0].message.content
         
         # Debug: Print the raw response length and content
-        print(f"\nDebug - AI Response length: {len(response)} characters")
-        print(f"\n{ANSI_CYAN_BG}{ANSI_BLACK}AI Response:{ANSI_RESET}")
-        print(f"{ANSI_BLUE}{response}{ANSI_RESET}")
-        print(f"\n{ANSI_CYAN_BG}{ANSI_BLACK}End AI Response{ANSI_RESET}")
+        print_agent_message("developer", f"\nDebug - AI Response length: {len(response)} characters")
+        print_agent_message("developer", f"\nAI Response:")
+        print_agent_message("developer", f"{response}")
+        print_agent_message("developer", f"End AI Response")
+        
+        # Review the changes
+        passed, review_response = review_changes(response)
+        if not passed:
+            print_agent_message("warning", "\nCode review failed. Retrying with feedback...")
+            # Retry with the review feedback
+            return get_ai_changes(
+                task_description,
+                repo_path,
+                attempt + 1,
+                review_response  # Pass the review feedback to the next attempt
+            )
         
         # Split response into file sections and process each one
         file_sections = response.split('FILE:')
         if len(file_sections) <= 1:
-            print("No file changes found in AI response")
+            print_agent_message("error", "No file changes found in AI response")
             return False
             
-        print("\n6. Applying changes to files...")
+        print_agent_message("developer", "\n6. Applying changes to files...")
         changes_made = False
         
         # Skip the first empty section before 'FILE:'
@@ -195,7 +265,7 @@ Repository Documentation:
                 
                 content_start = section.find(start_marker)
                 if content_start == -1:
-                    print(f"   ⚠️  No code block found for {file_path}")
+                    print_agent_message("warning", f"   ⚠️  No code block found for {file_path}")
                     continue
                 
                 # Skip the language identifier line
@@ -203,7 +273,7 @@ Repository Documentation:
                 content_end = section.find(end_marker, content_start)
                 
                 if content_end == -1:
-                    print(f"   ⚠️  Unclosed code block for {file_path}")
+                    print_agent_message("warning", f"   ⚠️  Unclosed code block for {file_path}")
                     # Try to find the next FILE: marker as a fallback end point
                     next_file = section.find('\nFILE:', content_start)
                     if next_file != -1:
@@ -216,7 +286,7 @@ Repository Documentation:
                 new_content = section[content_start:content_end].strip()
                 
                 if not new_content:
-                    print(f"   ⚠️  Empty content for {file_path}")
+                    print_agent_message("warning", f"   ⚠️  Empty content for {file_path}")
                     continue
                 
                 # Create the full path and ensure the directory exists
@@ -226,26 +296,34 @@ Repository Documentation:
                 # Write the changes
                 with open(full_path, 'w', encoding='utf-8') as f:
                     f.write(new_content)
-                print(f"   ✓ Updated file: {file_path}")
+                print_agent_message("developer", f"   ✓ Updated file: {file_path}")
                 changes_made = True
                 
             except Exception as e:
-                print(f"   ⚠️  Error processing {file_path}: {str(e)}")
+                print_agent_message("error", f"   ⚠️  Error processing {file_path}: {str(e)}")
                 continue
         
         if changes_made:
-            print("\n✨ AI implementation completed successfully!")
+            print_agent_message("developer", "\n✨ AI implementation completed successfully!")
             return True
         else:
-            print("\n⚠️  No valid changes were made")
+            print_agent_message("warning", "\n⚠️  No valid changes were made")
             return False
         
     except Exception as e:
-        print(f"\n❌ Error during AI implementation: {str(e)}")
+        print_agent_message("error", f"\n❌ Error during AI implementation: {str(e)}")
         return False
+
+def sanitize_branch_name(task_description: str) -> str:
+    """Convert task description to valid branch name"""
+    # Convert to lowercase and replace spaces/special chars with hyphens
+    branch_name = re.sub(r'[^a-zA-Z0-9\s-]', '', task_description.lower())
+    branch_name = re.sub(r'\s+', '-', branch_name.strip())
+    return f"feature/{branch_name}"
 
 def main():
     # Get task description from command line or other input method
+    print("\nAI Game Studio - Developer Agent")  # Neutral color for system messages
     task_description = input("Enter the task description: ")
     
     # Initialize the automation tool
@@ -256,40 +334,40 @@ def main():
     repo_name = os.getenv('GITHUB_REPO_NAME')
     
     if not repo_url or not repo_name:
-        print("Error: GITHUB_REPO_URL and GITHUB_REPO_NAME must be set in .env file")
+        print_agent_message("error", "Error: GITHUB_REPO_URL and GITHUB_REPO_NAME must be set in .env file")
         return
     
     branch_name = sanitize_branch_name(task_description)
     
     # Setup repository
     if automation.setup_repository(repo_url, repo_name):
-        print(f"Repository setup successful")
+        print("Repository setup successful")  # Changed to neutral color
         
         # Create feature branch
         if automation.create_feature_branch(branch_name):
-            print(f"Created and checked out branch: {branch_name}")
+            print(f"Created and checked out branch: {branch_name}")  # Changed to neutral color
             
             # Implement AI-driven changes
             if get_ai_changes(task_description, automation.current_repo_path):
-                print("AI changes implemented successfully")
+                print_agent_message("developer", "AI changes implemented successfully")
                 
                 # Commit changes
                 if automation.commit_changes(f"AI Implementation: {task_description}"):
-                    print("Changes committed successfully")
+                    print_agent_message("developer", "Changes committed successfully")
                     
                     # Push changes
                     if automation.push_changes():
-                        print("Changes pushed successfully")
+                        print_agent_message("developer", "Changes pushed successfully")
                     else:
-                        print("Failed to push changes")
+                        print_agent_message("error", "Failed to push changes")
                 else:
-                    print("No changes to commit or commit failed")
+                    print_agent_message("warning", "No changes to commit or commit failed")
             else:
-                print("Failed to implement AI changes")
+                print_agent_message("error", "Failed to implement AI changes")
         else:
-            print("Failed to create feature branch")
+            print_agent_message("error", "Failed to create feature branch")
     else:
-        print("Failed to setup repository")
+        print_agent_message("error", "Failed to setup repository")
 
 if __name__ == "__main__":
     main() 
