@@ -34,11 +34,11 @@ A Python tool for automating GitHub operations, designed to help AI agents make 
    cp .env.example .env
    ```
 
-2. Add your GitHub Personal Access Token and Anthropic API key to the `.env` file:
+2. Add your GitHub Personal Access Token and OpenAI API key to the `.env` file:
 
    ```
    GITHUB_TOKEN=your_personal_access_token
-   ANTHROPIC_API_KEY=your_anthropic_api_key
+   OPENAI_API_KEY=your_openai_api_key
    GITHUB_REPO_URL=your_repo_url
    GITHUB_REPO_NAME=your_repo_name
    ```
@@ -49,6 +49,14 @@ A Python tool for automating GitHub operations, designed to help AI agents make 
    2. Click "Generate New Token"
    3. Select the necessary scopes (repo, workflow)
    4. Copy the generated token
+
+   To get an OpenAI API key:
+
+   1. Go to OpenAI's website (https://platform.openai.com)
+   2. Sign up or log in to your account
+   3. Navigate to the API section
+   4. Create a new API key
+   5. Copy the generated key
 
 ## Usage
 
