@@ -8,6 +8,69 @@ import re
 # Load environment variables from .env file
 load_dotenv()
 
+# Add these constants at the top with other imports
+ANSI_BLUE = "\033[94m"
+ANSI_RESET = "\033[0m"
+ANSI_CYAN_BG = "\033[46m"
+ANSI_BLACK = "\033[30m"
+
+# Add this after the imports and before the functions
+SYSTEM_PROMPT = """You are an expert software developer. When modifying files:
+
+1. COPY THE ENTIRE FILE LINE BY LINE:
+   - Start with the very first line of the file
+   - Copy each line exactly as it appears
+   - Continue until you reach the very last line
+   - Do not skip any lines
+   - Do not summarize any sections
+   - Do not use placeholders or comments like "existing code here" or "this stays the same"
+   - Do not redact any code
+
+2. MAKE YOUR CHANGES:
+   - Only modify the specific lines that need to change
+   - Keep all other lines exactly as they are
+   - Do not add comments about unchanged sections
+   - Do not use placeholders or ellipsis
+
+3. FORMAT YOUR RESPONSE:
+FILE:path/to/file
+```language
+<ENTIRE FILE CONTENT FROM FIRST LINE TO LAST LINE>
+```
+
+ABSOLUTELY FORBIDDEN:
+❌ DO NOT USE comments like:
+   - "// Rest of the code remains the same"
+   - "<!-- Previous code unchanged -->"
+   - "/* Existing implementation */"
+❌ DO NOT USE ellipsis (...) to skip code
+❌ DO NOT USE placeholders or summaries
+❌ DO NOT SKIP any part of the file
+
+Example - INCORRECT:
+FILE:game.html
+```html
+<div id="status-bar">
+    <!-- Previous status elements -->
+    <div>New Element: <span id="new-value"></span></div>
+    <!-- Rest of the status bar -->
+</div>
+```
+
+Example - CORRECT:
+FILE:game.html
+```html
+<div id="status-bar">
+    <div>Health: <span id="health">100</span></div>
+    <div>Score: <span id="score">0</span></div>
+    <div>Position: (<span id="position-x">0</span>, <span id="position-y">0</span>)</div>
+    <div>New Element: <span id="new-value"></span></div>
+    <div>Player: <span id="player-name">Player1</span></div>
+</div>
+```
+
+Remember: The output must be an EXACT copy of the original file with ONLY your specific changes applied. Every single line must be present."""
+
 def sanitize_branch_name(task_description: str) -> str:
     """Convert task description to valid branch name"""
     # Convert to lowercase and replace spaces/special chars with hyphens
@@ -17,105 +80,168 @@ def sanitize_branch_name(task_description: str) -> str:
 
 def get_ai_changes(task_description: str, repo_path: Path) -> bool:
     """Use Claude to implement the requested changes"""
-    anthropic = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
-    
-    # First, collect documentation files
-    doc_files = {}
-    code_files = {}
-    
-    # Priority files to read first (documentation)
-    priority_files = ['README.md', 'CONTRIBUTING.md', 'docs/', '.env.example']
-    
-    # Read priority documentation files first
-    for file_pattern in priority_files:
-        if '/' in file_pattern:
-            # Handle directory patterns
-            for file_path in repo_path.rglob(f"{file_pattern}*"):
+    try:
+        print("\nStarting AI implementation process...")
+        
+        anthropic = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+        
+        print("1. Reading repository files...")
+        doc_files = {}
+        code_files = {}
+        
+        # Priority files to read first (documentation)
+        priority_files = ['README.md', 'CONTRIBUTING.md', 'docs/', '.env.example']
+        
+        file_count = 0
+        # Read priority documentation files first
+        for file_pattern in priority_files:
+            if '/' in file_pattern:
+                # Handle directory patterns
+                for file_path in repo_path.rglob(f"{file_pattern}*"):
+                    if file_path.is_file():
+                        try:
+                            with open(file_path, 'r') as f:
+                                doc_files[str(file_path.relative_to(repo_path))] = f.read()
+                                file_count += 1
+                                print(f"   - Read documentation file: {file_path.name}")
+                        except Exception as e:
+                            print(f"   ⚠️  Error reading {file_path}: {e}")
+            else:
+                # Handle specific files
+                file_path = repo_path / file_pattern
                 if file_path.is_file():
                     try:
                         with open(file_path, 'r') as f:
                             doc_files[str(file_path.relative_to(repo_path))] = f.read()
+                            file_count += 1
+                            print(f"   - Read documentation file: {file_path.name}")
                     except Exception as e:
-                        print(f"Error reading {file_path}: {e}")
-        else:
-            # Handle specific files
-            file_path = repo_path / file_pattern
-            if file_path.is_file():
+                        print(f"   ⚠️  Error reading {file_path}: {e}")
+        
+        print("\n2. Reading code files...")
+        # Then read code files
+        for file_path in repo_path.rglob('*'):
+            if file_path.is_file() and file_path.suffix in ['.py', '.js', '.ts', '.jsx', '.tsx', '.css', '.html']:
                 try:
                     with open(file_path, 'r') as f:
-                        doc_files[str(file_path.relative_to(repo_path))] = f.read()
+                        code_files[str(file_path.relative_to(repo_path))] = f.read()
+                        file_count += 1
+                        print(f"   - Read code file: {file_path.name}")
                 except Exception as e:
-                    print(f"Error reading {file_path}: {e}")
-    
-    # Then read code files
-    for file_path in repo_path.rglob('*'):
-        if file_path.is_file() and file_path.suffix in ['.py', '.js', '.ts', '.jsx', '.tsx', '.css', '.html']:
-            try:
-                with open(file_path, 'r') as f:
-                    code_files[str(file_path.relative_to(repo_path))] = f.read()
-            except Exception as e:
-                print(f"Error reading {file_path}: {e}")
+                    print(f"   ⚠️  Error reading {file_path}: {e}")
 
-    # Prepare the context for Claude with clear sections
-    context = f"""Task: {task_description}
+        print(f"\nTotal files read: {file_count}")
+        print("\n3. Preparing context for AI analysis...")
+        
+        # Prepare the context for Claude with clear sections
+        context = f"""Task: {task_description}
 
 Repository Documentation:
 -----------------------
 """
-    # Add documentation files first
-    for filename, content in doc_files.items():
-        context += f"\nFile: {filename}\n```\n{content}\n```\n"
+        # Add documentation files first
+        for filename, content in doc_files.items():
+            context += f"\nFile: {filename}\n```\n{content}\n```\n"
 
-    context += "\nRepository Code Structure:\n-------------------------\n"
-    # Add code files
-    for filename, content in code_files.items():
-        context += f"\nFile: {filename}\n```\n{content}\n```\n"
+        context += "\nRepository Code Structure:\n-------------------------\n"
+        # Add code files
+        for filename, content in code_files.items():
+            context += f"\nFile: {filename}\n```\n{content}\n```\n"
 
-    # Update the system prompt to emphasize reading documentation first
-    system_prompt = """You are an expert software developer. Follow these steps:
-1. First, carefully read the repository documentation (README.md and other docs) to understand:
-   - The project's purpose and structure
-   - Any coding conventions or guidelines
-   - The development workflow
-2. Analyze the existing code structure and patterns
-3. Implement the requested changes following the project's conventions
-4. Return ONLY the file changes needed, formatted as:
-   FILE:path/to/file   ```
-   New content   ```
-"""
+        print("\n4. Sending request to Claude...")
+        print("   This may take a few minutes depending on the complexity of the task...")
+        print("   The AI is analyzing the codebase and preparing changes...")
+        
+        # Increase max_tokens for larger responses
+        message = anthropic.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=8192,  # Increased from 4096
+            temperature=0,
+            system=SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": context + "\n\nPlease implement the requested changes following the project's conventions. Return only the file changes needed."
+            }]
+        )
 
-    # Get AI response
-    message = anthropic.messages.create(
-        model="claude-3-sonnet-20240229",
-        max_tokens=4096,
-        temperature=0,
-        system=system_prompt,
-        messages=[{
-            "role": "user",
-            "content": context + "\n\nPlease implement the requested changes following the project's conventions. Return only the file changes needed."
-        }]
-    )
-
-    # Process and apply changes
-    try:
+        print("\n5. Processing AI response...")
         response = message.content[0].text
-        file_changes = response.split('FILE:')[1:]  # Skip the first empty split
         
-        for change in file_changes:
-            file_path_end = change.find('\n```\n')
-            file_path = change[:file_path_end].strip()
-            content_start = change.find('\n```\n') + 5
-            content_end = change.find('\n```', content_start)
-            new_content = change[content_start:content_end]
+        # Debug: Print the raw response length and content
+        print(f"\nDebug - AI Response length: {len(response)} characters")
+        print(f"\n{ANSI_CYAN_BG}{ANSI_BLACK}AI Response:{ANSI_RESET}")
+        print(f"{ANSI_BLUE}{response}{ANSI_RESET}")
+        print(f"\n{ANSI_CYAN_BG}{ANSI_BLACK}End AI Response{ANSI_RESET}")
+        
+        # Split response into file sections and process each one
+        file_sections = response.split('FILE:')
+        if len(file_sections) <= 1:
+            print("No file changes found in AI response")
+            return False
             
-            full_path = repo_path / file_path
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(full_path, 'w') as f:
-                f.write(new_content)
+        print("\n6. Applying changes to files...")
+        changes_made = False
         
-        return True
+        # Skip the first empty section before 'FILE:'
+        for section in file_sections[1:]:
+            try:
+                # Extract file path (everything up to the first code block)
+                lines = section.strip().split('\n')
+                file_path = lines[0].strip()
+                
+                # Find the code block markers
+                start_marker = '```'
+                end_marker = '```'
+                
+                content_start = section.find(start_marker)
+                if content_start == -1:
+                    print(f"   ⚠️  No code block found for {file_path}")
+                    continue
+                
+                # Skip the language identifier line
+                content_start = section.find('\n', content_start) + 1
+                content_end = section.find(end_marker, content_start)
+                
+                if content_end == -1:
+                    print(f"   ⚠️  Unclosed code block for {file_path}")
+                    # Try to find the next FILE: marker as a fallback end point
+                    next_file = section.find('\nFILE:', content_start)
+                    if next_file != -1:
+                        content_end = next_file
+                    else:
+                        # If no next FILE: marker, use the rest of the section
+                        content_end = len(section)
+                
+                # Extract and clean the content
+                new_content = section[content_start:content_end].strip()
+                
+                if not new_content:
+                    print(f"   ⚠️  Empty content for {file_path}")
+                    continue
+                
+                # Create the full path and ensure the directory exists
+                full_path = repo_path / file_path
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                
+                # Write the changes
+                with open(full_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+                print(f"   ✓ Updated file: {file_path}")
+                changes_made = True
+                
+            except Exception as e:
+                print(f"   ⚠️  Error processing {file_path}: {str(e)}")
+                continue
+        
+        if changes_made:
+            print("\n✨ AI implementation completed successfully!")
+            return True
+        else:
+            print("\n⚠️  No valid changes were made")
+            return False
+        
     except Exception as e:
-        print(f"Error applying AI changes: {e}")
+        print(f"\n❌ Error during AI implementation: {str(e)}")
         return False
 
 def main():

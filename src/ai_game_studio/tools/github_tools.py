@@ -73,23 +73,16 @@ class GitHubAutomation:
             if not self._repo:
                 raise ValueError("Repository not initialized")
             
-            # Get the default branch name
-            default_branch = None
-            for ref in self._repo.refs:
-                if ref.name in ['main', 'master']:
-                    default_branch = ref.name
-                    break
+            # Fetch from remote to ensure we have latest refs
+            origin = self._repo.remote(name='origin')
+            origin.fetch()
             
-            if not default_branch:
-                # If neither main nor master exists, try to get the default branch from remote
-                try:
-                    default_branch = self._repo.active_branch.name
-                except:
-                    print("Could not determine default branch")
-                    return False
+            # Always use 'main' as the default branch
+            default_branch = 'main'
             
-            # Checkout the default branch
+            # Checkout and pull the default branch
             self._repo.git.checkout(default_branch)
+            self._repo.git.pull('origin', default_branch)
             
             # Create and checkout new branch
             if branch_name not in self._repo.refs:
@@ -98,6 +91,7 @@ class GitHubAutomation:
             else:
                 self._repo.git.checkout(branch_name)
             return True
+            
         except Exception as e:
             print(f"Error creating branch: {e}")
             return False
