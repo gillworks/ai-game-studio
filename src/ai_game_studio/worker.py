@@ -16,7 +16,7 @@ celery_app = Celery(
 )
 
 @celery_app.task(bind=True)
-def process_task(self, task_description: str, repo_url: str = None, repo_name: str = None):
+def process_task(self, task_description: str, detailed_description: str = None, repo_url: str = None, repo_name: str = None):
     """Celery task to process AI changes"""
     try:
         # Update task status to running
@@ -48,12 +48,18 @@ def process_task(self, task_description: str, repo_url: str = None, repo_name: s
         if not automation.create_feature_branch(branch_name):
             raise RuntimeError("Failed to create feature branch")
 
-        # Implement AI-driven changes
-        if not get_ai_changes(task_description, automation.current_repo_path):
+        # Prepare full task context
+        full_task_description = task_description
+        if detailed_description:
+            full_task_description = f"{task_description}\n\nDetailed Description:\n{detailed_description}"
+
+        # Implement AI-driven changes with full context
+        if not get_ai_changes(full_task_description, automation.current_repo_path):
             raise RuntimeError("Failed to implement AI changes")
 
         # Commit changes
-        if not automation.commit_changes(f"AI Implementation: {task_description}"):
+        commit_message = f"AI Implementation: {task_description}"
+        if not automation.commit_changes(commit_message):
             raise RuntimeError("No changes to commit or commit failed")
 
         # Push changes

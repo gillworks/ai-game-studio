@@ -66,8 +66,6 @@ Run the main script:
 python -m ai_game_studio.main
 ```
 
-### Example Code
-
 ## API Usage
 
 The AI Game Studio uses a distributed task queue system to handle concurrent AI operations. Here's how to set it up:
@@ -121,7 +119,8 @@ Request body:
 
 ```json
 {
-  "task_description": "Your task description",
+  "task_description": "Brief title or summary of the task",
+  "detailed_description": "Optional: Detailed explanation of the requirements and context",
   "repo_url": "Optional: override repo URL from env",
   "repo_name": "Optional: override repo name from env"
 }
@@ -132,48 +131,118 @@ Response:
 ```json
 {
   "task_id": "123e4567-e89b-12d3-a456-426614174000",
-  "message": "Task created successfully"
-}
-```
-
-#### GET /api/tasks/{task_id}
-
-Get the status of a specific task.
-
-Response:
-
-```json
-{
-  "task_id": "123e4567-e89b-12d3-a456-426614174000",
-  "status": "running", // "pending" | "running" | "completed" | "failed"
+  "status": "running",
   "message": "Current status message",
   "created_at": "2024-03-20T10:30:00Z",
   "updated_at": "2024-03-20T10:35:00Z",
+  "task_description": "Brief title or summary",
+  "detailed_description": "Detailed explanation of requirements...",
   "branch_name": "feature/your-task-description",
-  "error_detail": null // Contains error message if status is "failed"
+  "error_detail": null
 }
 ```
 
-#### GET /api/tasks
+### Example Usage with JavaScript/TypeScript
 
-Get a list of all tasks and their statuses.
+```typescript
+// Using fetch with detailed description
+const response = await fetch("http://localhost:8000/api/tasks", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    task_description: "Add user authentication",
+    detailed_description: `Implement user authentication with the following requirements:
+- Use JWT tokens for session management
+- Add login and registration endpoints
+- Include password hashing with bcrypt
+- Add rate limiting for auth endpoints
+- Store user data in PostgreSQL`,
+    // Optional: Override repo settings
+    // repo_url: 'https://github.com/user/repo',
+    // repo_name: 'repo-name'
+  }),
+});
 
-Response:
+const result = await response.json();
 
-```json
-[
-  {
-    "task_id": "123e4567-e89b-12d3-a456-426614174000",
-    "status": "completed",
-    "message": "Changes implemented and pushed successfully",
-    "created_at": "2024-03-20T10:30:00Z",
-    "updated_at": "2024-03-20T10:35:00Z",
-    "branch_name": "feature/your-task-description",
-    "error_detail": null
-  }
-  // ... more tasks
-]
+// Using axios with detailed description
+import axios from "axios";
+
+try {
+  const response = await axios.post("http://localhost:8000/api/tasks", {
+    task_description: "Add user authentication",
+    detailed_description: `Implement user authentication with the following requirements:
+- Use JWT tokens for session management
+- Add login and registration endpoints
+- Include password hashing with bcrypt
+- Add rate limiting for auth endpoints
+- Store user data in PostgreSQL`,
+  });
+  console.log(response.data);
+} catch (error) {
+  console.error("Error:", error.response?.data || error.message);
+}
 ```
+
+### Example: Polling for Task Completion
+
+```typescript
+async function waitForTaskCompletion(taskId: string, maxAttempts = 60) {
+  for (let i = 0; i < maxAttempts; i++) {
+    const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`);
+    const status = await response.json();
+
+    switch (status.status) {
+      case "completed":
+        console.log(`Task completed! Branch: ${status.branch_name}`);
+        console.log(`Original task: ${status.task_description}`);
+        if (status.detailed_description) {
+          console.log(`Detailed requirements:\n${status.detailed_description}`);
+        }
+        return status;
+      case "failed":
+        throw new Error(status.error_detail || "Task failed");
+      default:
+        // Task is still pending or running
+        await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds
+    }
+  }
+  throw new Error("Task timed out");
+}
+
+// Usage example with detailed description
+try {
+  const createResponse = await fetch("http://localhost:8000/api/tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      task_description: "Add user authentication",
+      detailed_description: `Implement user authentication with the following requirements:
+- Use JWT tokens for session management
+- Add login and registration endpoints
+- Include password hashing with bcrypt
+- Add rate limiting for auth endpoints
+- Store user data in PostgreSQL`,
+    }),
+  });
+  const { task_id } = await createResponse.json();
+
+  // Wait for completion and get full task details
+  const result = await waitForTaskCompletion(task_id);
+  console.log("Task completed successfully!");
+} catch (error) {
+  console.error("Task failed:", error.message);
+}
+```
+
+### API Documentation
+
+Once the server is running, you can access:
+
+- Interactive API docs: http://localhost:8000/docs
+- OpenAPI specification: http://localhost:8000/openapi.json
 
 ### Task Lifecycle
 
@@ -212,142 +281,3 @@ Each task maintains these timestamps:
 
 - `created_at`: When the task was first created (never changes)
 - `updated_at`: Last time the task status was checked (updates with each query)
-
-### API Documentation
-
-Once the server is running, you can access:
-
-- Interactive API docs: http://localhost:8000/docs
-- OpenAPI specification: http://localhost:8000/openapi.json
-
-### Example Usage with JavaScript/TypeScript
-
-```typescript
-// Using fetch
-const response = await fetch("http://localhost:8000/api/tasks", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({
-    task_description: "Your task description",
-    // Optional: Override repo settings
-    // repo_url: 'https://github.com/user/repo',
-    // repo_name: 'repo-name'
-  }),
-});
-
-const result = await response.json();
-
-// Using axios
-import axios from "axios";
-
-try {
-  const response = await axios.post("http://localhost:8000/api/tasks", {
-    task_description: "Your task description",
-  });
-  console.log(response.data);
-} catch (error) {
-  console.error("Error:", error.response?.data || error.message);
-}
-```
-
-### Error Handling
-
-The API returns appropriate HTTP status codes:
-
-- 200: Success
-- 400: Bad Request (missing or invalid parameters)
-- 500: Internal Server Error
-
-Error response format:
-
-```json
-{
-  "detail": "Error message describing what went wrong"
-}
-```
-
-### Development Notes
-
-1. For local development:
-
-   - Ensure Redis is running (`docker ps` to verify)
-   - Start at least one Celery worker
-   - Monitor worker logs for task processing
-   - Use `celery -A ai_game_studio.worker worker --loglevel=debug` for detailed logs
-
-2. The system can be configured using environment variables:
-
-   ```bash
-   PORT=8000                    # API server port (default: 8000)
-   HOST=0.0.0.0                # API server host (default: 0.0.0.0)
-   REDIS_URL=redis://localhost:6379/0  # Redis connection URL
-   ```
-
-3. For production deployment, consider:
-
-   - Using a production-grade ASGI server
-   - Implementing authentication
-   - Setting up rate limiting
-   - Configuring HTTPS
-   - Using a production Redis setup
-   - Monitoring Celery workers with tools like Flower
-
-   ```bash
-   # Install Flower for Celery monitoring
-   pip install flower
-
-   # Start Flower dashboard
-   celery -A ai_game_studio.worker flower
-   ```
-
-4. Scaling considerations:
-   - Each worker requires:
-     - ~2GB RAM (varies with LLM usage)
-     - Disk space for Git operations
-     - Network bandwidth for API calls
-   - Monitor worker resource usage
-   - Adjust number of workers based on server capacity
-   - Consider using container orchestration for worker management
-
-### Example: Polling for Task Completion
-
-```typescript
-async function waitForTaskCompletion(taskId: string, maxAttempts = 60) {
-  for (let i = 0; i < maxAttempts; i++) {
-    const response = await fetch(`http://localhost:8000/api/tasks/${taskId}`);
-    const status = await response.json();
-
-    switch (status.status) {
-      case "completed":
-        return status;
-      case "failed":
-        throw new Error(status.error_detail || "Task failed");
-      default:
-        // Task is still pending or running
-        await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds
-    }
-  }
-  throw new Error("Task timed out");
-}
-
-// Usage
-try {
-  // Create task
-  const createResponse = await fetch("http://localhost:8000/api/tasks", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      task_description: "Your task description",
-    }),
-  });
-  const { task_id } = await createResponse.json();
-
-  // Wait for completion
-  const result = await waitForTaskCompletion(task_id);
-  console.log(`Task completed! Branch: ${result.branch_name}`);
-} catch (error) {
-  console.error("Task failed:", error.message);
-}
-```

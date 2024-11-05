@@ -184,12 +184,18 @@ def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, pre
         print(f"\nTotal files read: {file_count}")  # Neutral color for system messages
         print("\n3. Preparing context for AI analysis...")  # Neutral color for system messages
         
-        # Prepare the context for GPT-4 with clear sections
-        context = f"""Task: {task_description}
-
-Repository Documentation:
------------------------
-"""
+        # Split task_description into title and detailed description if it contains both
+        task_parts = task_description.split("\n\nDetailed Description:\n", 1)
+        task_title = task_parts[0]
+        detailed_desc = task_parts[1] if len(task_parts) > 1 else None
+        
+        # Prepare the context with clear sections
+        context = "Task Title: " + task_title + "\n"
+        if detailed_desc:
+            context += "\nDetailed Description:\n" + detailed_desc + "\n"
+        
+        context += "\nRepository Documentation:\n-----------------------\n"
+        
         # Add documentation files first
         for filename, content in doc_files.items():
             context += f"\nFile: {filename}\n```\n{content}\n```\n"

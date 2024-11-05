@@ -27,6 +27,7 @@ task_timestamps = {}
 
 class TaskRequest(BaseModel):
     task_description: str
+    detailed_description: Optional[str] = None
     repo_url: Optional[str] = None
     repo_name: Optional[str] = None
 
@@ -40,6 +41,8 @@ class TaskStatus(BaseModel):
     message: str
     created_at: datetime
     updated_at: datetime
+    task_description: str
+    detailed_description: Optional[str] = None
     branch_name: Optional[str] = None
     error_detail: Optional[str] = None
 
@@ -89,13 +92,18 @@ async def create_task(request: TaskRequest):
     # Start Celery task first to get its ID
     celery_task = process_task.delay(
         request.task_description,
+        request.detailed_description,
         request.repo_url,
         request.repo_name
     )
     
     task_id = celery_task.id
-    # Store creation timestamp using Celery's task ID
-    task_timestamps[task_id] = datetime.utcnow()
+    # Store creation timestamp and task details
+    task_timestamps[task_id] = {
+        'created_at': datetime.utcnow(),
+        'task_description': request.task_description,
+        'detailed_description': request.detailed_description
+    }
 
     return TaskResponse(
         task_id=task_id,
@@ -108,13 +116,15 @@ async def get_task_status(task_id: str):
     if task_id not in task_timestamps:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    created_time = task_timestamps[task_id]
-    status_info = get_task_status_info(task_id, created_time)
+    task_info = task_timestamps[task_id]
+    status_info = get_task_status_info(task_id, task_info['created_at'])
     
     return TaskStatus(
         task_id=task_id,
-        created_at=created_time,
+        created_at=task_info['created_at'],
         updated_at=datetime.utcnow(),
+        task_description=task_info['task_description'],
+        detailed_description=task_info['detailed_description'],
         **status_info
     )
 
@@ -123,14 +133,15 @@ async def list_tasks():
     """Get a list of all active tasks and their statuses"""
     all_tasks = []
     
-    # Use our stored task IDs instead of inspecting Celery
-    for task_id, created_time in task_timestamps.items():
-        status_info = get_task_status_info(task_id, created_time)
+    for task_id, task_info in task_timestamps.items():
+        status_info = get_task_status_info(task_id, task_info['created_at'])
         
         all_tasks.append(TaskStatus(
             task_id=task_id,
-            created_at=created_time,
+            created_at=task_info['created_at'],
             updated_at=datetime.utcnow(),
+            task_description=task_info['task_description'],
+            detailed_description=task_info['detailed_description'],
             **status_info
         ))
     
