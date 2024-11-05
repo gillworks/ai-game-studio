@@ -9,6 +9,9 @@ setup(
         "gitpython>=3.1.41",
         "openai>=1.0.0",
         "python-dotenv>=1.0.1",
+        "fastapi>=0.109.0",
+        "uvicorn>=0.27.0",
+        "pydantic>=2.0.0",
     ],
     python_requires=">=3.8",
 ) 
