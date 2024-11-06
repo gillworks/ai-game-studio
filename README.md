@@ -1,10 +1,20 @@
 # ai-game-studio
 
-A Python tool for automating GitHub operations, designed to help AI agents make code changes.
+A Python tool for automating GitHub operations, designed to help AI agents make code changes. Features an intelligent developer agent and code reviewer system to ensure high-quality automated changes.
 
 ## Prerequisites
 
 - Python 3.8 or higher
+- Git installed and configured
+
+## Features
+
+- 🤖 AI Developer Agent powered by OpenAI GPT-4o
+- 🔍 Automated Code Review System
+- 🔄 Smart retry mechanism (up to 3 attempts)
+- 🎨 Color-coded agent outputs for better visibility
+- 🌳 Automatic branch management
+- 🔐 Secure credential handling
 
 ## Installation
 
@@ -34,7 +44,7 @@ A Python tool for automating GitHub operations, designed to help AI agents make 
    cp .env.example .env
    ```
 
-2. Add your GitHub Personal Access Token and OpenAI API key to the `.env` file:
+2. Add your API keys and GitHub configuration to the `.env` file:
 
    ```
    GITHUB_TOKEN=your_personal_access_token
@@ -65,6 +75,34 @@ Run the main script:
 ```bash
 python -m ai_game_studio.main
 ```
+
+### How It Works
+
+1. **Developer Agent (Blue output)**
+
+   - Analyzes the codebase
+   - Implements requested changes
+   - Ensures complete file preservation
+   - Makes atomic, focused changes
+
+2. **Code Reviewer Agent (Green output)**
+
+   - Reviews all changes for completeness
+   - Checks for code integrity
+   - Verifies no code is missing or truncated
+   - Provides detailed feedback if issues are found
+
+3. **Retry Mechanism**
+
+   - Up to 3 attempts to get the changes right
+   - Each retry includes previous review feedback
+   - Developer agent learns from review comments
+
+4. **Output Colors**
+   - 🔵 Blue: Developer agent messages
+   - 🟢 Green: Code reviewer messages
+   - 🔴 Red: Error messages
+   - 🟡 Yellow: Warning messages
 
 ## API Usage
 
