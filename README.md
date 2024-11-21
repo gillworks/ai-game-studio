@@ -319,3 +319,130 @@ Each task maintains these timestamps:
 
 - `created_at`: When the task was first created (never changes)
 - `updated_at`: Last time the task status was checked (updates with each query)
+
+## Worker Configuration
+
+The system requires Celery workers to process tasks. Start workers before creating projects:
+
+```bash
+# Start a single worker
+celery -A ai_game_studio.worker worker --loglevel=info
+
+# Start multiple workers (recommended)
+celery -A ai_game_studio.worker worker --loglevel=info --concurrency=3
+```
+
+Guidelines for number of workers:
+
+- Each worker can process one task at a time
+- Tasks with no dependencies run in parallel if workers are available
+- Dependent tasks wait for their dependencies regardless of worker availability
+- Recommended: Start workers equal to the number of CPU cores
+
+Example:
+
+```bash
+# On a 4-core machine
+celery -A ai_game_studio.worker worker --loglevel=info --concurrency=4
+```
+
+You can also start multiple worker processes on different machines, all connecting to the same Redis instance for distributed processing.
+
+## Project Tasks vs Individual Tasks
+
+The system supports both individual tasks and larger project tasks that get broken down automatically:
+
+### Individual Tasks
+
+For single, focused changes:
+
+```typescript
+// Create a single task
+const response = await fetch("http://localhost:8000/api/tasks", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    task_description: "Add user authentication",
+    detailed_description: "Implement JWT-based authentication...",
+  }),
+});
+```
+
+### Project Tasks
+
+For larger features that need to be broken down:
+
+```typescript
+// Create a project task with key files
+const response = await fetch("http://localhost:8000/api/project-tasks", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    project_description: "Add inventory system to the game",
+    key_files: [
+      "src/models/schema.py",
+      "src/api/endpoints.py",
+      "src/game/inventory.py",
+      "README.md",
+    ],
+  }),
+});
+
+const { project_id, subtask_ids } = await response.json();
+```
+
+The project manager will:
+
+1. Analyze the specified key files to understand the codebase
+2. Break down the project into smaller, focused tasks
+3. Identify dependencies between tasks
+4. Create a single feature branch for all related changes
+5. Assign relevant files to each subtask
+
+### Monitoring Project Progress
+
+Track the status of all subtasks in a project:
+
+```typescript
+const projectStatus = await fetch(`http://localhost:8000/api/project-tasks/${project_id}`);
+const status = await projectStatus.json();
+
+console.log("Project status:", status);
+// Example output:
+{
+  "project_id": "123e4567-e89b-12d3-a456-426614174000",
+  "created_at": "2024-03-20T10:30:00Z",
+  "updated_at": "2024-03-20T10:35:00Z",
+  "subtasks": [
+    {
+      "task_id": "task-1",
+      "status": "completed",
+      "task_description": "Create database schema",
+      "branch_name": "project/123e4567-e89b-12d3-a456-426614174000"
+    },
+    {
+      "task_id": "task-2",
+      "status": "running",
+      "task_description": "Implement API endpoints",
+      "branch_name": "project/123e4567-e89b-12d3-a456-426614174000"
+    }
+  ]
+}
+```
+
+### Key Files
+
+When creating a project task, you can specify key files that should be analyzed:
+
+- These files help the project manager understand the codebase
+- Each subtask gets assigned relevant files based on its requirements
+- If no key files are specified, the project manager will analyze common configuration files and project structure
+- Files that don't exist will be noted but won't cause an error
+
+Example key files to consider:
+
+- `README.md` - For project context
+- `schema.sql` or ORM models - For database structure
+- Main API/endpoint files - For service interfaces
+- Core game logic files - For game-specific features
+- Configuration files - For system setup

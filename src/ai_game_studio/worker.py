@@ -4,6 +4,7 @@ import os
 from .main import get_ai_changes, sanitize_branch_name
 from .tools.github_tools import GitHubAutomation
 from datetime import datetime
+from typing import List, Optional
 
 # Load environment variables
 load_dotenv()
@@ -16,7 +17,15 @@ celery_app = Celery(
 )
 
 @celery_app.task(bind=True)
-def process_task(self, task_description: str, detailed_description: str = None, repo_url: str = None, repo_name: str = None):
+def process_task(
+    self,
+    task_description: str,
+    detailed_description: str = None,
+    repo_url: str = None,
+    repo_name: str = None,
+    branch_name: Optional[str] = None,
+    key_files: Optional[List[str]] = None
+):
     """Celery task to process AI changes"""
     try:
         # Update task status to running
@@ -38,7 +47,10 @@ def process_task(self, task_description: str, detailed_description: str = None, 
 
         # Initialize automation
         automation = GitHubAutomation()
-        branch_name = sanitize_branch_name(task_description)
+        
+        # Use provided branch_name or create from task description
+        if branch_name is None:
+            branch_name = sanitize_branch_name(task_description)
 
         # Setup repository
         if not automation.setup_repository(repo_url, repo_name):
@@ -53,8 +65,8 @@ def process_task(self, task_description: str, detailed_description: str = None, 
         if detailed_description:
             full_task_description = f"{task_description}\n\nDetailed Description:\n{detailed_description}"
 
-        # Implement AI-driven changes with full context
-        if not get_ai_changes(full_task_description, automation.current_repo_path):
+        # Pass key_files to get_ai_changes
+        if not get_ai_changes(full_task_description, automation.current_repo_path, key_files=key_files):
             raise RuntimeError("Failed to implement AI changes")
 
         # Commit changes

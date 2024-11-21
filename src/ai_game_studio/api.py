@@ -2,10 +2,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Optional, Literal, Dict
+from typing import Optional, Literal, Dict, List
 from datetime import datetime
 import uuid
 from .worker import celery_app, process_task
+from .project_manager import create_subtasks
 
 app = FastAPI(
     title="AI Game Studio API",
@@ -25,6 +26,11 @@ app.add_middleware(
 # In-memory storage for task creation times
 task_timestamps = {}
 
+# Add at the top with other storage
+project_timestamps = {}  # Store project creation times
+project_subtasks = {}   # Store mapping of project_id to subtask_ids
+
+# Add new models
 class TaskRequest(BaseModel):
     task_description: str
     detailed_description: Optional[str] = None
@@ -45,6 +51,65 @@ class TaskStatus(BaseModel):
     detailed_description: Optional[str] = None
     branch_name: Optional[str] = None
     error_detail: Optional[str] = None
+
+class ProjectTaskRequest(BaseModel):
+    project_name: str
+    project_description: str
+    repo_url: Optional[str] = None
+    repo_name: Optional[str] = None
+    key_files: Optional[List[str]] = None
+
+class ProjectTaskResponse(BaseModel):
+    project_id: str
+    subtask_ids: list[str]
+    message: str
+
+# Add new endpoint
+@app.post("/api/project-tasks", response_model=ProjectTaskResponse)
+async def create_project_task(request: ProjectTaskRequest):
+    """Create a new project task that will be broken down into smaller tasks"""
+    try:
+        # Generate a project ID
+        project_id = str(uuid.uuid4())
+        
+        # Use the project manager to create subtasks
+        subtask_ids = await create_subtasks(
+            project_id=project_id,
+            project_name=request.project_name,
+            project_description=request.project_description,
+            repo_url=request.repo_url,
+            repo_name=request.repo_name,
+            key_files=request.key_files
+        )
+        
+        return ProjectTaskResponse(
+            project_id=project_id,
+            subtask_ids=subtask_ids,
+            message="Project tasks created successfully"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Add project status endpoint
+@app.get("/api/project-tasks/{project_id}")
+async def get_project_status(project_id: str):
+    """Get the status of all subtasks in a project"""
+    if project_id not in project_timestamps:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    subtask_ids = project_subtasks.get(project_id, [])
+    subtask_statuses = []
+    
+    for task_id in subtask_ids:
+        status = await get_task_status(task_id)
+        subtask_statuses.append(status)
+    
+    return {
+        "project_id": project_id,
+        "created_at": project_timestamps[project_id],
+        "updated_at": datetime.utcnow(),
+        "subtasks": subtask_statuses
+    }
 
 def get_task_status_info(task_id: str, created_time: datetime) -> Dict:
     """Helper function to get consistent task status information"""

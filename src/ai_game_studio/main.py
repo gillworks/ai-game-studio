@@ -4,6 +4,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import re
+from typing import List, Optional
 
 # Load environment variables from .env file
 load_dotenv()
@@ -119,10 +120,16 @@ def review_changes(response: str) -> tuple[bool, str]:
         print_agent_message("error", f"\nError during code review: {str(e)}")
         return False, str(e)
 
-def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, previous_feedback: str = None) -> bool:
+def get_ai_changes(
+    task_description: str,
+    repo_path: Path,
+    attempt: int = 1,
+    previous_feedback: str = None,
+    key_files: Optional[List[str]] = None
+) -> bool:
     """Use GPT-4o to implement the requested changes"""
     try:
-        print("\nAttempt", attempt, "of", MAX_ATTEMPTS)  # Neutral color for system messages
+        print("\nAttempt", attempt, "of", MAX_ATTEMPTS)
         
         if attempt > MAX_ATTEMPTS:
             print_agent_message("error", "\nMaximum attempts reached. Aborting.")
@@ -136,7 +143,7 @@ def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, pre
         
         client = OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
-        print("\n1. Reading repository files...")  # Neutral color for system messages
+        print("\n1. Reading repository files...")
         doc_files = {}
         code_files = {}
         
@@ -169,7 +176,22 @@ def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, pre
                     except Exception as e:
                         print_agent_message("error", f"   ⚠️  Error reading {file_path}: {e}")
         
-        print("\n2. Reading code files...")  # Neutral color for system messages
+        # If key_files is provided, prioritize reading those files first
+        if key_files:
+            print("\n2a. Reading specified key files...")
+            for file_path in key_files:
+                full_path = repo_path / file_path
+                if full_path.is_file():
+                    try:
+                        with open(full_path, 'r') as f:
+                            code_files[str(full_path.relative_to(repo_path))] = f.read()
+                            file_count += 1
+                            print(f"   - Read key file: {file_path}")
+                    except Exception as e:
+                        print_agent_message("error", f"   ⚠️  Error reading {file_path}: {e}")
+
+        # Continue with normal file reading for any remaining files
+        print("\n2b. Reading remaining repository files...")
         # Then read code files
         for file_path in repo_path.rglob('*'):
             if file_path.is_file() and file_path.suffix in ['.py', '.js', '.ts', '.jsx', '.tsx', '.css', '.html']:
@@ -181,8 +203,8 @@ def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, pre
                 except Exception as e:
                     print_agent_message("error", f"   ⚠️  Error reading {file_path}: {e}")
 
-        print(f"\nTotal files read: {file_count}")  # Neutral color for system messages
-        print("\n3. Preparing context for AI analysis...")  # Neutral color for system messages
+        print(f"\nTotal files read: {file_count}")
+        print("\n3. Preparing context for AI analysis...")
         
         # Split task_description into title and detailed description if it contains both
         task_parts = task_description.split("\n\nDetailed Description:\n", 1)
@@ -205,9 +227,9 @@ def get_ai_changes(task_description: str, repo_path: Path, attempt: int = 1, pre
         for filename, content in code_files.items():
             context += f"\nFile: {filename}\n```\n{content}\n```\n"
 
-        print("\n4. Sending request to GPT-4o...")  # Neutral color for system messages
-        print("   This may take a few minutes depending on the complexity of the task...")  # Neutral color for system messages
-        print("   The AI is analyzing the codebase and preparing changes...")  # Neutral color for system messages
+        print("\n4. Sending request to GPT-4o...")
+        print("   This may take a few minutes depending on the complexity of the task...")
+        print("   The AI is analyzing the codebase and preparing changes...")
         
         # Update the task description to include previous feedback if any
         full_task = task_description
@@ -246,7 +268,8 @@ Please fix ALL these issues and ensure your response includes the COMPLETE file 
                 task_description,
                 repo_path,
                 attempt + 1,
-                review_response  # Pass the review feedback to the next attempt
+                review_response,  # Pass the review feedback to the next attempt
+                key_files
             )
         
         # Split response into file sections and process each one
@@ -329,7 +352,7 @@ def sanitize_branch_name(task_description: str) -> str:
 
 def main():
     # Get task description from command line or other input method
-    print("\nAI Game Studio - Developer Agent")  # Neutral color for system messages
+    print("\nAI Game Studio - Developer Agent")
     task_description = input("Enter the task description: ")
     
     # Initialize the automation tool
@@ -347,11 +370,11 @@ def main():
     
     # Setup repository
     if automation.setup_repository(repo_url, repo_name):
-        print("Repository setup successful")  # Changed to neutral color
+        print("Repository setup successful")
         
         # Create feature branch
         if automation.create_feature_branch(branch_name):
-            print(f"Created and checked out branch: {branch_name}")  # Changed to neutral color
+            print(f"Created and checked out branch: {branch_name}")
             
             # Implement AI-driven changes
             if get_ai_changes(task_description, automation.current_repo_path):
